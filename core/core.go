@@ -67,6 +67,7 @@ import (
 	addrutil "gx/ipfs/QmbH3urJHTrZSUETgvQRriWM6mMFqyNSwCqnhknxfSGVWv/go-addr-util"
 	yamux "gx/ipfs/Qmbn7RYyWzBVXiUp9jZ1dA4VADHy9DtS7iZLwfhEUQvm3U/go-smux-yamux"
 	ma "gx/ipfs/QmcyqRMCAXVtYPS4DiBrA7sezL9rRGfW8Ctx7cywL4TXJj/go-multiaddr"
+	mafilter "gx/ipfs/Qmd3bFpvhYdjX7q11bNKsZnxwtWbwTsgkFhzemqLb5L4Wy/go-maddr-filter"
 	peer "gx/ipfs/QmdS9KpbDyPrieswibZhkod1oXqRwZJrUPzxCofAMWpFGq/go-libp2p-peer"
 	metrics "gx/ipfs/QmdibiN2wzuuXXz4JvqQ1ZGW3eUkoAy1AWznHFau6iePCc/go-libp2p-metrics"
 	smux "gx/ipfs/QmeZBgYBHvxMukGK5ojg28BCNLB9SeXqT7XXg6o7r2GbJy/go-stream-muxer"
@@ -211,8 +212,17 @@ func (n *IpfsNode) startOnlineServices(ctx context.Context, routingOption Routin
 		}()
 	}
 
+	addrsFactory, err := makeAddrsFactory(cfg.Addresses)
+	if err != nil {
+		return err
+	}
+
+	hostopts := &ConstructPeerHostOpts{
+		AddrsFactory:      addrsFactory,
+		DisableNatPortMap: cfg.Swarm.DisableNatPortMap,
+	}
 	peerhost, err := hostOption(ctx, n.Identity, n.Peerstore, n.Reporter,
-		addrfilter, tpt, protec, &ConstructPeerHostOpts{DisableNatPortMap: cfg.Swarm.DisableNatPortMap})
+		addrfilter, tpt, protec, hostopts)
 	if err != nil {
 		return err
 	}
@@ -258,6 +268,50 @@ func (n *IpfsNode) startOnlineServices(ctx context.Context, routingOption Routin
 	}
 
 	return n.Bootstrap(DefaultBootstrapConfig)
+}
+
+func makeAddrsFactory(cfg config.Addresses) (p2pbhost.AddrsFactory, error) {
+	var annAddrs []ma.Multiaddr
+	for _, addr := range cfg.Announce {
+		maddr, err := ma.NewMultiaddr(addr)
+		if err != nil {
+			return nil, err
+		}
+		annAddrs = append(annAddrs, maddr)
+	}
+
+	filters := mafilter.NewFilters()
+	noAnnAddrs := map[string]bool{}
+	for _, addr := range cfg.NoAnnounce {
+		f, err := mamask.NewMask(addr)
+		if err == nil {
+			filters.AddDialFilter(f)
+			continue
+		}
+		maddr, err := ma.NewMultiaddr(addr)
+		if err != nil {
+			return nil, err
+		}
+		noAnnAddrs[maddr.String()] = true
+	}
+
+	return func(allAddrs []ma.Multiaddr) []ma.Multiaddr {
+		var addrs []ma.Multiaddr
+		if len(annAddrs) > 0 {
+			addrs = annAddrs[:]
+		} else {
+			addrs = allAddrs
+		}
+
+		var out []ma.Multiaddr
+		for _, maddr := range addrs {
+			ok, _ := noAnnAddrs[maddr.String()]
+			if !ok && !filters.AddrBlocked(maddr) {
+				out = append(out, maddr)
+			}
+		}
+		return out
+	}, nil
 }
 
 func makeSmuxTransport(mplexExp bool) smux.Transport {
@@ -708,6 +762,7 @@ func listenAddresses(cfg *config.Config) ([]ma.Multiaddr, error) {
 
 type ConstructPeerHostOpts struct {
 	DisableNatPortMap bool
+	AddrsFactory      p2pbhost.AddrsFactory
 }
 
 type HostOption func(ctx context.Context, id peer.ID, ps pstore.Peerstore, bwr metrics.Reporter, fs []*net.IPNet, tpt smux.Transport, protc ipnet.Protector, opts *ConstructPeerHostOpts) (p2phost.Host, error)
@@ -732,6 +787,9 @@ func constructPeerHost(ctx context.Context, id peer.ID, ps pstore.Peerstore, bwr
 	hostOpts := []interface{}{bwr}
 	if !opts.DisableNatPortMap {
 		hostOpts = append(hostOpts, p2pbhost.NATPortMap)
+	}
+	if opts.AddrsFactory != nil {
+		hostOpts = append(hostOpts, opts.AddrsFactory)
 	}
 
 	host := p2pbhost.New(network, hostOpts...)
