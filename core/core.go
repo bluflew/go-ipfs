@@ -373,24 +373,6 @@ func (n *IpfsNode) setupIpnsRepublisher() error {
 	}
 
 	n.IpnsRepub = ipnsrp.NewRepublisher(n.Routing, n.Repo.Datastore(), n.PrivateKey, n.Repo.Keystore())
-	n.IpnsRepub.AddName(n.Identity)
-
-	ks := n.Repo.Keystore()
-	keys, err := ks.List()
-	if err != nil {
-		return err
-	}
-	for _, keyName := range keys {
-		privKey, err := ks.Get(keyName)
-		if err != nil {
-			return err
-		}
-		peer, err := peer.IDFromPrivateKey(privKey)
-		if err != nil {
-			return err
-		}
-		n.IpnsRepub.AddName(peer)
-	}
 
 	if cfg.Ipns.RepublishPeriod != "" {
 		d, err := time.ParseDuration(cfg.Ipns.RepublishPeriod)

@@ -48,21 +48,21 @@ type Republisher struct {
 
 func NewRepublisher(r routing.ValueStore, ds ds.Datastore, self ic.PrivKey, ks keystore.Keystore) *Republisher {
 	return &Republisher{
-		r:              r,
-		ds:             ds,
-		self:           self,
-		ks:             ks,
-		entries:        make(map[peer.ID]struct{}),
+		r:    r,
+		ds:   ds,
+		self: self,
+		ks:   ks,
+		//entries:        make(map[peer.ID]struct{}),
 		Interval:       DefaultRebroadcastInterval,
 		RecordLifetime: DefaultRecordLifetime,
 	}
 }
 
-func (rp *Republisher) AddName(id peer.ID) {
-	rp.entrylock.Lock()
-	defer rp.entrylock.Unlock()
-	rp.entries[id] = struct{}{}
-}
+//func (rp *Republisher) AddName(id peer.ID) {
+//	rp.entrylock.Lock()
+//	defer rp.entrylock.Unlock()
+//	rp.entries[id] = struct{}{}
+//}
 
 func (rp *Republisher) Run(proc goprocess.Process) {
 	tick := time.NewTicker(rp.Interval)
@@ -85,39 +85,56 @@ func (rp *Republisher) republishEntries(p goprocess.Process) error {
 	ctx, cancel := context.WithCancel(gpctx.OnClosingContext(p))
 	defer cancel()
 
-	for id, _ := range rp.entries {
-		log.Debugf("republishing ipns entry for %s", id)
-		var priv ic.PrivKey
-		selfId, err := peer.IDFromPrivateKey(rp.self)
+	err := rp.republishEntry(ctx, rp.self)
+	if err != nil {
+		return err
+	}
+
+	if rp.ks != nil {
+		keyNames, err := rp.ks.List()
 		if err != nil {
 			return err
 		}
-		if id == selfId {
-			priv = rp.self
-		} else {
-			priv, err = rp.ks.GetById(id)
+		for _, name := range keyNames {
+			priv, err := rp.ks.Get(name)
 			if err != nil {
 				return err
 			}
-		}
-
-		// Look for it locally only
-		_, ipnskey := namesys.IpnsKeysForID(id)
-		p, seq, err := rp.getLastVal(ipnskey)
-		if err != nil {
-			if err == errNoEntry {
-				continue
+			err = rp.republishEntry(ctx, priv)
+			if err != nil {
+				return err
 			}
-			return err
-		}
 
-		// update record with same sequence number
-		eol := time.Now().Add(rp.RecordLifetime)
-		err = namesys.PutRecordToRouting(ctx, priv, p, seq, eol, rp.r, id)
-		if err != nil {
-			println("put record to routing error: " + err.Error())
-			return err
 		}
+	}
+
+	return nil
+}
+
+func (rp *Republisher) republishEntry(ctx context.Context, priv ic.PrivKey) error {
+	id, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		return err
+	}
+
+	log.Debugf("republishing ipns entry for %s", id)
+
+	// Look for it locally only
+	_, ipnskey := namesys.IpnsKeysForID(id)
+	p, seq, err := rp.getLastVal(ipnskey)
+	if err != nil {
+		if err == errNoEntry {
+			return nil
+		}
+		return err
+	}
+
+	// update record with same sequence number
+	eol := time.Now().Add(rp.RecordLifetime)
+	err = namesys.PutRecordToRouting(ctx, priv, p, seq, eol, rp.r, id)
+	if err != nil {
+		println("put record to routing error: " + err.Error())
+		return err
 	}
 
 	return nil
