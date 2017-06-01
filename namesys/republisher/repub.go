@@ -6,12 +6,13 @@ import (
 	"sync"
 	"time"
 
+	keystore "github.com/ipfs/go-ipfs/keystore"
 	namesys "github.com/ipfs/go-ipfs/namesys"
 	pb "github.com/ipfs/go-ipfs/namesys/pb"
 	path "github.com/ipfs/go-ipfs/path"
 	dshelp "github.com/ipfs/go-ipfs/thirdparty/ds-help"
 
-	pstore "gx/ipfs/QmNUVzEjq3XWJ89hegahPvyfJbTXgTaom48pLb7YBD9gHQ/go-libp2p-peerstore"
+	ic "gx/ipfs/QmP1DfoUjiWH2ZBo1PBH6FupdBucbDepx3HpWmEY6JMUpY/go-libp2p-crypto"
 	ds "gx/ipfs/QmRWDav6mzWseLWeYfVd5fvUKiVe9xNH29YfMF438fG364/go-datastore"
 	goprocess "gx/ipfs/QmSF8fPo3jgVBAy8fpdjjYqgG87dkJgUprRBHRd2tmfgpP/goprocess"
 	gpctx "gx/ipfs/QmSF8fPo3jgVBAy8fpdjjYqgG87dkJgUprRBHRd2tmfgpP/goprocess/context"
@@ -31,9 +32,10 @@ var DefaultRebroadcastInterval = time.Hour * 4
 const DefaultRecordLifetime = time.Hour * 24
 
 type Republisher struct {
-	r  routing.ValueStore
-	ds ds.Datastore
-	ps pstore.Peerstore
+	r    routing.ValueStore
+	ds   ds.Datastore
+	self ic.PrivKey
+	ks   keystore.Keystore
 
 	Interval time.Duration
 
@@ -44,11 +46,12 @@ type Republisher struct {
 	entries   map[peer.ID]struct{}
 }
 
-func NewRepublisher(r routing.ValueStore, ds ds.Datastore, ps pstore.Peerstore) *Republisher {
+func NewRepublisher(r routing.ValueStore, ds ds.Datastore, self ic.PrivKey, ks keystore.Keystore) *Republisher {
 	return &Republisher{
 		r:              r,
-		ps:             ps,
 		ds:             ds,
+		self:           self,
+		ks:             ks,
 		entries:        make(map[peer.ID]struct{}),
 		Interval:       DefaultRebroadcastInterval,
 		RecordLifetime: DefaultRecordLifetime,
@@ -84,7 +87,19 @@ func (rp *Republisher) republishEntries(p goprocess.Process) error {
 
 	for id, _ := range rp.entries {
 		log.Debugf("republishing ipns entry for %s", id)
-		priv := rp.ps.PrivKey(id)
+		var priv ic.PrivKey
+		selfId, err := peer.IDFromPrivateKey(rp.self)
+		if err != nil {
+			return err
+		}
+		if id == selfId {
+			priv = rp.self
+		} else {
+			priv, err = rp.ks.GetById(id)
+			if err != nil {
+				return err
+			}
+		}
 
 		// Look for it locally only
 		_, ipnskey := namesys.IpnsKeysForID(id)
@@ -100,6 +115,7 @@ func (rp *Republisher) republishEntries(p goprocess.Process) error {
 		eol := time.Now().Add(rp.RecordLifetime)
 		err = namesys.PutRecordToRouting(ctx, priv, p, seq, eol, rp.r, id)
 		if err != nil {
+			println("put record to routing error: " + err.Error())
 			return err
 		}
 	}
