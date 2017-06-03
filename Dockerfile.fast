@@ -31,7 +31,7 @@ VOLUME $IPFS_PATH
 COPY ./package.json $SRC_PATH/package.json
 
 RUN apk add --no-cache --virtual .build-deps-ipfs musl-dev gcc go git \
-	&& apk add --no-cache tini su-exec bash wget ca-certificates \
+	&& apk add --no-cache su-exec bash wget ca-certificates \
 	&& adduser -D -h $IPFS_PATH -u 1000 ipfs \
 	&& go get -u github.com/whyrusleeping/gx \
 	&& go get -u github.com/whyrusleeping/gx-go \
@@ -51,5 +51,4 @@ RUN cd $SRC_PATH \
 	&& chmod 755 /usr/local/bin/start_ipfs \
 	&& apk del --purge .build-deps-ipfs && rm -rf $GOPATH && rm -vf $IPFS_PATH/api
 
-ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/start_ipfs"]
-CMD ["daemon", "--migrate=true"]
+CMD ["/usr/local/bin/start_ipfs", "daemon", "--migrate=true"]

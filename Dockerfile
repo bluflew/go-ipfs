@@ -38,7 +38,7 @@ VOLUME $IPFS_PATH
 COPY . $SRC_PATH
 
 RUN apk add --no-cache --virtual .build-deps-ipfs musl-dev gcc go git \
-	&& apk add --no-cache tini su-exec bash wget ca-certificates \
+	&& apk add --no-cache su-exec bash wget ca-certificates \
 	# Setup user
 	&& adduser -D -h $IPFS_PATH -u 1000 ipfs \
 	# Install gx
@@ -60,10 +60,4 @@ RUN apk add --no-cache --virtual .build-deps-ipfs musl-dev gcc go git \
 	# Remove all build-time dependencies
 	&& apk del --purge .build-deps-ipfs && rm -rf $GOPATH && rm -vf $IPFS_PATH/api
 
-# This just makes sure that:
-# 1. There's an fs-repo, and initializes one if there isn't.
-# 2. The API and Gateway are accessible from outside the container.
-ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/start_ipfs"]
-
-# Execute the daemon subcommand by default
-CMD ["daemon", "--migrate=true"]
+CMD ["/usr/local/bin/start_ipfs", "daemon", "--migrate=true"]
